@@ -33,15 +33,15 @@
                     <span>Identity</span>
                     <span>{{ auth()->user()->kd_karyawan }}</span>
                 </div>
-                <div class="info-item">
+                {{-- <div class="info-item">
                     <i class="bi bi-lock"></i>
                     <span>Token created at</span>
                     <span>April 24, 2025 22:34 WIB</span>
-                </div>
+                </div> --}}
                 <div class="info-item">
                     <i class="bi bi-heart"></i>
                     <span>Login expires at</span>
-                    <span>May 01, 2025 22:34 WIB</span>
+                    <span>{{ $loginExpiresAt }} WIB</span>
                 </div>
             </div>
         </div>

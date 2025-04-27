@@ -5,11 +5,23 @@ namespace App\Http\Controllers;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cookie;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
 use Laravel\Passport\Client;
 
 class AuthController extends Controller
 {
+    private $clientId_;
+    private $secretKey_;
+
+    public function __construct()
+    {
+        $this->clientId_ = env('SSO_CLIENT_ID');
+        $this->secretKey_ = env('SSO_SECRET_KEY');
+    }
+
     public function index()
     {
         return view('auth.login');
@@ -31,24 +43,21 @@ class AuthController extends Controller
         }
 
         if (Auth::attempt($credentials)) {
-            return redirect()->intended('/authorize');
+            $intendedUrl = redirect()->getIntendedUrl();
+            $prefix = url('/oauth/authorize');
+
+            if (Str::startsWith($intendedUrl, $prefix)) {
+                return redirect()->intended();
+            } else {
+                return to_route('authorize');
+            }
         }
 
         return back()->withErrors(['kd_karyawan' => 'Invalid credentials']);
     }
 
-    public function authorize(Request $request)
-    {
-        $client = Client::where('id', $request->client_id)->first();
-        if (empty($client)) {
-            return response()->json(['error' => 'Invalid client'], 400);
-        }
-        return view('auth.authorize', compact('client', 'request'));
-    }
-
     public function approve(Request $request)
     {
-        $user = Auth::user();
         $client = Client::where('id', $request->client_id)->first();
 
         if (empty($client)) {
@@ -56,27 +65,131 @@ class AuthController extends Controller
         }
 
         // Generate authorization code
-        $authCode = $user->createToken('auth_code', ['user-info'])->accessToken;
 
         // Parameter yang diperlukan untuk rute /oauth/authorize
-        // $query = http_build_query([
-        //     'client_id' => $client->id,
-        //     'redirect_uri' => $client->redirect_uri,
-        //     'response_type' => 'code',
-        //     'scope' => 'user-info',
-        //     'state' => $request->state ?? null, // Optional state parameter
-        // ]);
+        $query = http_build_query([
+            'client_id' => $client->id,
+            'redirect_uri' => $client->redirect_uri,
+            'response_type' => 'code',
+            'scope' => $request->scope ?? 'user-info',
+            'state' => $request->state ?? null, // Optional state parameter
+        ]);
 
         // Redirect back to client with auth code
-        $redirectUri = $client->redirect_uri . '?code=' . $authCode;
-        return redirect($redirectUri);
-        // return redirect('/oauth/authorize?' . $query);
+        return redirect('/oauth/authorize?' . $query);
     }
 
-    public function logout()
+    public function logout(Request $request)
     {
+        $token = $request->cookie('sso_tok');
+
+        if ($token) {
+            // Revoke token di SSO Server
+            Http::withToken($token)->post(url("/api/oauth/revoke"), [
+                'token' => $token,
+                'client_id' => $this->clientId_,
+                'client_secret' => $this->secretKey_,
+            ]);
+        }
+
+        // Hapus cookie
+        Cookie::queue(Cookie::forget('sso_tok', '/', env('COOKIE_DOMAIN')));
+        Cookie::queue(Cookie::forget('sso_tok_expired', '/', env('COOKIE_DOMAIN')));
+
+        // Logout dari guard web (akhiri sesi autentikasi)
         Auth::logout();
 
-        return to_route('login');
+        // Invalidate sesi
+        $request->session()->invalidate();
+        $request->session()->regenerateToken();
+
+        // Redirect ke URL yang diberikan (dari parameter redirect)
+        $redirectUrl = $request->query('redirect', route('login'));
+
+        // Validasi redirect URL (opsional)
+        if (!filter_var($redirectUrl, FILTER_VALIDATE_URL)) {
+            $redirectUrl = route('login');
+        }
+
+        return redirect($redirectUrl);
+        // return to_route('login');
+    }
+
+    /*=================================
+            INTERNAL AUTHORIZE
+    =================================*/
+
+    public function authorize()
+    {
+        $client = Client::where('id', $this->clientId_)->first();
+        if (empty($client)) {
+            return response()->json(['error' => 'Invalid client'], 400);
+        }
+
+        $query = http_build_query([
+            'client_id' => $this->clientId_,
+            'redirect_uri' => route('callback'),
+            'response_type' => 'code',
+            'scope' => 'user-info',
+            'state' => null, // Optional state parameter
+        ]);
+
+        return redirect('/oauth/authorize?' . $query);
+    }
+
+    public function handleCallback(Request $request)
+    {
+        $code = $request->query('code');
+        $redirectUri = route('callback');
+
+        // Request access token
+        $response = Http::post(url('/oauth/token'), [
+            'grant_type' => 'authorization_code',
+            'client_id' => $this->clientId_,
+            'client_secret' => $this->secretKey_,
+            'redirect_uri' => $redirectUri,
+            'code' => $code,
+        ]);
+
+        $responseData = $response->json();
+
+        // Pastikan response berhasil
+        if (isset($responseData['access_token'])) {
+            $accessToken = $responseData['access_token'];
+            $expiresIn = $responseData['expires_in'] ?? 3600; // Default 1 jam jika tidak ada expires_in
+
+            // Hitung waktu kedaluwarsa (dalam detik)
+            $expiresAt = now()->addSeconds($expiresIn)->timestamp;
+
+            // Simpan Access Token ke cookie
+            Cookie::queue(
+                'sso_tok',
+                $accessToken,
+                $expiresIn / 60, // Waktu kedaluwarsa dalam menit
+                '/', // Path eksplisit ke root
+                env('COOKIE_DOMAIN'), // Pastikan domain sesuai
+                false, // Secure (ubah ke true jika HTTPS)
+                false, // HttpOnly
+                false, // Raw
+                'Lax' // SameSite
+            );
+
+            // Simpan waktu kedaluwarsa ke cookie terpisah
+            Cookie::queue(
+                'sso_tok_expired',
+                $expiresAt,
+                $expiresIn / 60,
+                '/',
+                env('COOKIE_DOMAIN'),
+                false,
+                false,
+                false,
+                'Lax'
+            );
+
+            return to_route('dashboard');
+        }
+
+        return to_route('login')->withErrors(['message' => 'Failed to obtain access token']);
     }
 }

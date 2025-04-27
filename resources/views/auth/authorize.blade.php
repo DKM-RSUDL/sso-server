@@ -229,7 +229,7 @@
                     <div class="card-footer">
                         <form method="POST" action="{{ route('authorize.approve') }}">
                             @csrf
-                            <input type="hidden" name="client_id" value="{{ $request->client_id }}">
+                            <input type="hidden" name="client_id" value="{{ $client->id }}">
                             <div class="d-flex justify-content-center">
                                 <button type="submit" class="btn btn-success me-4">Authorize</button>
                                 <a href="#" class="btn btn-danger">Cancel</a>

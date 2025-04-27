@@ -12,11 +12,11 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware) {
-        $middleware->api([
-            'throttle:api',
-            \Illuminate\Routing\Middleware\SubstituteBindings::class,
-            \Laravel\Passport\Http\Middleware\CreateFreshApiToken::class, // Tambahkan untuk Passport
-        ]);
+        // $middleware->api([
+        //     'throttle:api',
+        //     \Illuminate\Routing\Middleware\SubstituteBindings::class,
+        //     \Laravel\Passport\Http\Middleware\CreateFreshApiToken::class, // Tambahkan untuk Passport
+        // ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
         //
